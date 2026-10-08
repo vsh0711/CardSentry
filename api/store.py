@@ -26,6 +26,14 @@ def _build_engine():
     if url:
         if url.startswith("postgres://"):  # SQLAlchemy wants postgresql://
             url = url.replace("postgres://", "postgresql://", 1)
+        if url.startswith("postgresql://"):
+            # Force the psycopg2 dialect explicitly. A bare "postgresql://" lets
+            # SQLAlchemy pick whichever driver it finds first (psycopg v3 vs
+            # psycopg2); on a minimal install (e.g. the dashboard's scoped
+            # requirements.txt, which only ships psycopg2-binary) that can
+            # resolve to "psycopg" and fail with ModuleNotFoundError even
+            # though a working Postgres driver is installed.
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
         return create_engine(url, pool_pre_ping=True)
     DEFAULT_SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{DEFAULT_SQLITE_PATH}")
