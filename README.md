@@ -5,7 +5,7 @@ credit-card transactions flow through Kafka, get scored in real time by an
 XGBoost + PyTorch sequence-model ensemble, and land on a live Streamlit
 dashboard with maps, charts, and drift monitoring.
 
-**Live demo:** _[add your deployed Streamlit Cloud URL here once pushed]_
+**Live demo:** [cardsentry.streamlit.app](https://cardsentry.streamlit.app/) (dashboard) · [cardsentry-api-dhap.onrender.com](https://cardsentry-api-dhap.onrender.com/health) (API, runs the Kafka consumer too)
 **Stack:** Python · Kafka (Redpanda) · XGBoost · PyTorch · Feast · MLflow · Evidently · FastAPI · Streamlit · Postgres (Neon)
 
 ![CardSentry dashboard demo — Live Feed, Chennai Map, Model Performance, Drift Monitor](docs/media/cardsentry_demo.gif)
@@ -227,6 +227,10 @@ useful to anyone reading this as a reference:
 | **Redpanda SASL handshake failed** | `Unsupported SASL mechanism: broker's supported mechanisms: SCRAM-SHA-256,SCRAM-SHA-512,OAUTHBEARER` | Code defaulted to `PLAIN`, which Redpanda Serverless doesn't offer | Switched to `SCRAM-SHA-256` |
 | **Kafka consumer group authorization failed** | Producer could write to the topic; consumer got `GROUP_AUTHORIZATION_FAILED` | Redpanda's ACLs for the generated credential covered the topic but not consumer-group membership — these are granted separately | Granted read/describe ACLs on the consumer group via the Redpanda console (a manual step, documented for anyone redeploying this) |
 | **Model achieved ROC-AUC 1.000** | Technically a "pass," but a reviewer would (correctly) read it as a leaky or trivial dataset | Fraud bursts clustered tightly in time while legit transactions almost never did — the model learned a shortcut, not fraud detection | See [Making the synthetic data honestly hard](#making-the-synthetic-data-honestly-hard) above — redesigned the generator rather than declaring victory |
+| **Render free-tier Web Service, torch+xgboost+feast+evidently install** | Build took ~2 minutes and the Streamlit Cloud deployment of the same `requirements.txt` crash-looped (boot failure, no useful log) | Streamlit Cloud's dashboard only imports `api.store` (SQLAlchemy) — it was installing the entire training/serving stack just to run a dashboard, likely hitting the free tier's memory/build limits | Added a scoped `dashboard/requirements.txt` (Streamlit Cloud prefers a requirements file next to the entrypoint over the repo root one) with only what `dashboard/app.py` actually imports |
+| **Render has no background workers on the free tier** | Needed the Kafka consumer running continuously alongside the API | Free tier only offers Web Services (HTTP-request-shaped, can sleep/wake); a separate consumer process isn't deployable there for free | Refactored `streaming/consumer.py` into a reusable `run_consumer_loop()`, started as a daemon thread from `api/main.py`'s lifespan when `KAFKA_BOOTSTRAP_SERVERS` is set — one free service does both HTTP scoring and stream consumption, reusing the already-loaded model |
+| **Dashboard showed "no transactions" even after `DATABASE_URL` was correctly set in Streamlit Cloud's Secrets** | Looked exactly like a missing/misread secret | Red herring on the first guess (assumed `st.secrets` wasn't mirrored into `os.environ`); the real cause only surfaced once the app's traceback was shared: `ModuleNotFoundError: No module named 'psycopg'` | A bare `postgresql://` URL lets SQLAlchemy pick whichever Postgres driver it resolves first (psycopg v3 vs psycopg2); the scoped dashboard requirements only installed `psycopg2-binary`. Fixed by forcing `postgresql+psycopg2://` explicitly in `api/store.py::_build_engine` — environment-independent regardless of which driver happens to be installed. Lesson: when a fix doesn't work, get the actual traceback before guessing a second time |
+| **Pushed fixes didn't reach the live Render service** | `git push` succeeded, but Render's deploy history still showed the very first commit | The service was created via a direct Render API call (to avoid needing OAuth dashboard clicks), which never registered a GitHub webhook — confirmed via `gh api repos/.../hooks`, which showed only Streamlit Cloud's webhook, none for Render | Manually triggered a deploy via `POST /v1/services/{id}/deploys` for the correct commit. Permanent fix needs a one-time manual step: Render dashboard → service → Settings → reconnect the GitHub integration (an OAuth consent only the account owner can grant) |
 
 ---
 
@@ -295,6 +299,18 @@ Copy `.env.example` to `.env` and fill in:
 - `KAFKA_BOOTSTRAP_SERVERS` / `KAFKA_API_KEY` / `KAFKA_API_SECRET` — Redpanda Serverless (SCRAM-SHA-256; also grant consumer-group ACLs, not just topic ACLs — see debugging journal)
 - `DATABASE_URL` — Neon Postgres (shared store for API + dashboard across processes)
 - `FEAST_REDIS_URL` — Upstash Redis (if using Feast's online store directly)
+
+**Render deployment note:** `render.yaml` is a one-click Blueprint (Render
+Dashboard → New → Blueprint → select the repo) — use that path for a fresh
+deploy, since it wires up the GitHub webhook correctly. If a service was
+instead created via Render's API directly (as this project's was, during
+initial setup), auto-deploy-on-push may not work until the GitHub
+integration is reconnected from the dashboard (service → Settings →
+GitHub). Until then, a push can be deployed manually:
+```bash
+curl -X POST -H "Authorization: Bearer $RENDER_API_KEY" \
+  "https://api.render.com/v1/services/<service-id>/deploys"
+```
 
 ### 6. Tests
 
