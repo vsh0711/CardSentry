@@ -1,0 +1,67 @@
+version: "3.8"
+
+# Full local stack: a single-node Redpanda (Kafka-compatible) broker + the API,
+# dashboard, producer and consumer. Swap KAFKA_BOOTSTRAP_SERVERS / DATABASE_URL
+# env vars to point at the managed free-tier services instead (see README).
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 512M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
+    environment:
+      - OMP_NUM_THREADS=1
+      - KMP_DUPLICATE_LIB_OK=TRUE
+
+  dashboard:
+    build: .
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
+      - ./monitoring/artifacts:/app/monitoring/artifacts
+    depends_on:
+      - api
+
+  consumer:
+    build: .
+    command: python streaming/consumer.py
+    volumes:
+      - ./data:/app/data
+      - ./models/artifacts:/app/models/artifacts
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - OMP_NUM_THREADS=1
+      - KMP_DUPLICATE_LIB_OK=TRUE
+    depends_on:
+      - redpanda
+
+  producer:
+    build: .
+    command: python streaming/producer.py
+    volumes:
+      - ./data:/app/data
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - PRODUCER_EVENTS_PER_SEC=20
+    depends_on:
+      - redpanda

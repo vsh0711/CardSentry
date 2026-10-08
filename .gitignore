@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+feature_repo/data/
+feature_repo/.feast_cache/
+
+data/raw/*.parquet
+data/cardsentry.db*
+mlflow.db
+mlruns/
+monitoring/artifacts/
+# models/artifacts/* IS committed (small, ~1.3MB) so the deployed dashboard/API
+# has a model to load without needing to retrain on the free-tier host.
+
+.env
+*.log
