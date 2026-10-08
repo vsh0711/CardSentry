@@ -10,6 +10,7 @@ service (api/scorer.py) -- one scoring implementation, two entry points.
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -42,9 +43,14 @@ def build_kafka_config() -> dict:
     return conf
 
 
-def main():
-    scorer = FraudScorer()
-    store = TransactionStore()
+def run_consumer_loop(scorer: FraudScorer, store: TransactionStore, stop_event: threading.Event | None = None):
+    """
+    The actual consume-score-persist loop, factored out so it can run either as
+    the `__main__` entrypoint (standalone `python streaming/consumer.py`) or as a
+    background thread inside the FastAPI process (api/main.py) -- the latter lets
+    a single free-tier Render web service do both HTTP scoring and continuous
+    Kafka consumption, since Render's free tier doesn't offer background workers.
+    """
     consumer = Consumer(build_kafka_config())
     consumer.subscribe([TOPIC])
     print(f"Consuming '{TOPIC}' and scoring transactions in real time...")
@@ -52,7 +58,7 @@ def main():
     processed = 0
     last_report = time.time()
     try:
-        while True:
+        while stop_event is None or not stop_event.is_set():
             msg = consumer.poll(1.0)
             if msg is None:
                 continue
@@ -83,7 +89,13 @@ def main():
         pass
     finally:
         consumer.close()
-        print(f"Stopped. Processed {processed:,} transactions.")
+        print(f"Consumer stopped. Processed {processed:,} transactions.")
+
+
+def main():
+    scorer = FraudScorer()
+    store = TransactionStore()
+    run_consumer_loop(scorer, store)
 
 
 if __name__ == "__main__":

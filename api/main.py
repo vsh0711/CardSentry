@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -26,14 +27,36 @@ from api.store import TransactionStore
 
 _scorer: Optional[FraudScorer] = None
 _store: Optional[TransactionStore] = None
+_consumer_stop_event: Optional[threading.Event] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _scorer, _store
+    global _scorer, _store, _consumer_stop_event
     _scorer = FraudScorer()
     _store = TransactionStore()
+
+    # Render's free tier only offers Web Services, not background workers, so
+    # the Kafka consumer runs as a daemon thread inside this same process when
+    # Kafka credentials are configured -- one free service does both HTTP
+    # scoring and continuous stream consumption, reusing the already-loaded
+    # model instead of a second process loading it again.
+    if os.environ.get("KAFKA_BOOTSTRAP_SERVERS"):
+        from streaming.consumer import run_consumer_loop
+        _consumer_stop_event = threading.Event()
+        thread = threading.Thread(
+            target=run_consumer_loop,
+            args=(_scorer, _store, _consumer_stop_event),
+            daemon=True,
+            name="kafka-consumer",
+        )
+        thread.start()
+        print("Started background Kafka consumer thread.")
+
     yield
+
+    if _consumer_stop_event is not None:
+        _consumer_stop_event.set()
 
 
 app = FastAPI(title="CardSentry Fraud Scoring API", version="1.0.0", lifespan=lifespan)

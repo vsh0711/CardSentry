@@ -1,0 +1,36 @@
+# Render Blueprint for CardSentry's API + Kafka consumer.
+#
+# This single free-tier Web Service runs both the FastAPI scoring endpoint
+# AND the Kafka consumer (as a background thread -- see api/main.py's
+# lifespan). Render's free tier doesn't offer standalone background workers,
+# so this is the one-service-does-both design documented in the README.
+#
+# Deploy: Render Dashboard -> New -> Blueprint -> select this repo.
+# Secret env vars (DATABASE_URL, KAFKA_*) are marked sync:false below, so
+# Render prompts for them at blueprint creation instead of storing them in
+# this committed file.
+
+services:
+  - type: web
+    name: cardsentry-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: KMP_DUPLICATE_LIB_OK
+        value: "TRUE"
+      - key: KAFKA_TOPIC
+        value: cardsentry-transactions
+      - key: KAFKA_SASL_MECHANISM
+        value: SCRAM-SHA-256
+      - key: DATABASE_URL
+        sync: false
+      - key: KAFKA_BOOTSTRAP_SERVERS
+        sync: false
+      - key: KAFKA_API_KEY
+        sync: false
+      - key: KAFKA_API_SECRET
+        sync: false
