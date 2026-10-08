@@ -21,6 +21,18 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Streamlit Cloud's "Secrets" panel populates st.secrets; depending on version
+# it isn't always mirrored into os.environ automatically. api/store.py reads
+# os.environ directly (shared with the non-Streamlit API/consumer processes),
+# so bridge any matching secrets into the environment before anything else
+# imports/uses them.
+try:
+    for _key in ("DATABASE_URL", "FEAST_REDIS_URL"):
+        if _key in st.secrets:
+            os.environ.setdefault(_key, st.secrets[_key])
+except Exception:
+    pass
+
 from api.store import TransactionStore
 
 st.set_page_config(page_title="CardSentry", page_icon="💳", layout="wide")
